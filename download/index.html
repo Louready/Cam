@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Perlin Noise Shooter with Camera Feed</title>
+  <!-- p5.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.6.0/lib/p5.min.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="game-container">
+    <!-- Canvas will be created here by p5.js -->
+    <div id="ui-overlay">
+      <div id="score-display"></div>
+      <div id="game-over-screen">
+        <h2>GAME OVER</h2>
+        <p>Your Score: <span id="final-score">0</span></p>
+        <button id="restart-button">Play Again</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Game Scripts -->
+  <script src="particles.js"></script>
+  <script src="player.js"></script>
+  <script src="bullets.js"></script>
+  <script src="enemies.js"></script>
+  <script src="mobile.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>

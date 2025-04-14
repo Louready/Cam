@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Perlin Noise Shooter with Camera Feed Player</title>
+  <!-- p5.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.6.0/lib/p5.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #defaultCanvas0 { display: block; }
+  </style>
+</head>
+<body>
+<script>
+/*******************************************************
+ *              GLOBAL VARIABLES & SETTINGS
+ *******************************************************/
+ 
+// Flow field settings (same as before)
+let cols, rows;
+let scale = 20;         // size of each cell in the flow field
+let inc = 0.05;         // noise increment
+let zOff = 0;           // time offset for Perlin noise
+let flowField = [];     // stores angle for each cell
+
+// Particle (smoke) settings
+let particles = [];
+let numParticles = 600;
+let alphaTrail = 20;    // background fade strength
+let maxSpeed = 2.0;     // speed for particles
+
+// Swirl effect (optional when mouse is pressed)
+let swirlRadius = 100;
+let swirlStrength = 0.15;
+
+// Canvas dimensions
+let w = 800;
+let h = 600;
+
+/*******************************************************
+ *                  GAME VARIABLES
+ *******************************************************/
+let player;
+let bullets = [];
+let enemies = [];
+let score = 0;
+let gameOver = false;
+let fireButton;  // HTML fire button
+
+/*******************************************************
+ *               MOBILE JOYSTICK SETTINGS
+ *******************************************************/
+let joystick = {
+  active: false,
+  // Fixed base position (bottom left)
+  baseX: 80,
+  baseY: h - 80,
+  // Current knob position (starts at base)
+  currentX: 80,
+  currentY: h - 80,
+  baseRadius: 50,
+  knobRadius: 20
+};
+
+/*******************************************************
+ *                   CAMERA FEED SETUP
+ *******************************************************/
+let video; // p5 video capture element
+
+/*******************************************************
+ *                        SETUP
+ *******************************************************/
+function setup() {
+  createCanvas(w, h);
+  
+  // Ask for camera permission and set up the video capture.
+  video = createCapture(VIDEO);
+  video.size(320, 240);
+  video.hide();  // Hide the default DOM element
+  
+  // Calculate flow field grid dimensions
+  cols = floor(width / scale);
+  rows = floor(height / scale);
+  flowField = new Array(cols * rows);
+  for (let i = 0; i < flowField.length; i++) {
+    flowField[i] = 0;
+  }
+  
+  // Create smoke particles for the background effect
+  for (let i = 0; i < numParticles; i++) {
+    particles.push(new Particle());
+  }
+  
+  // Initialize the player at the center.
+  // The player will display the camera feed in a circular shape.
+  player = new Player();
+  
+  // Create a FIRE button for mobile controls
+  fireButton = createButton("FIRE");
+  fireButton.style('position', 'absolute');
+  fireButton.style('bottom', '20px');
+  fireButton.style('right', '20px');
+  fireButton.style('font-size', '20px');
+  fireButton.style('padding', '10px 20px');
+  fireButton.mousePressed(() => {
+    if (!gameOver) player.shoot();
+  });
+  
+  background(0);
+}
+
+/*******************************************************
+ *                         DRAW
+ *******************************************************/
+function draw() {
+  // Create a trailing/fading background effect
+  fill(0, alphaTrail);
+  rect(0, 0, width, height);
+
+  // Update the Perlin noise flow field; optionally apply swirl on mouse press (desktop)
+  updateFlowField();
+  if (mouseIsPressed && !touches.length) {
+    applySwirl(mouseX, mouseY);
+  }
+  
+  // Update and display smoke particles (background effect)
+  particles.forEach(p => {
+    p.follow(flowField);
+    p.update();
+    p.edges();
+    p.show();
+  });
+  
+  // --- MOBILE JOYSTICK HANDLING ---
+  // Look for a touch in the lower left for joystick control.
+  let joystickTouch = null;
+  for (let t of touches) {
+    if (t.x < 150 && t.y > height - 150) {
+      joystickTouch = t;
+      break;
+    }
+  }
+  if (joystickTouch) {
+    joystick.active = true;
+    joystick.currentX = joystickTouch.x;
+    joystick.currentY = joystickTouch.y;
+  } else {
+    joystick.active = false;
+    joystick.currentX = joystick.baseX;
+    joystick.currentY = joystick.baseY;
+  }
+  
+  // Draw the on-screen joystick for mobile devices
+  drawJoystick();
+  
+  // Update and display the player (if game is not over)
+  if (!gameOver) {
+    player.update();
+    player.show();
+  }
+  
+  // Update and display bullets
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    bullets[i].update();
+    bullets[i].show();
+    if (bullets[i].offscreen()) {
+      bullets.splice(i, 1);
+    }
+  }
+  
+  // Update and display enemies
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    enemies[i].update();
+    enemies[i].show();
+    // If an enemy touches the player, end the game.
+    let d = dist(enemies[i].pos.x, enemies[i].pos.y, player.pos.x, player.pos.y);
+    if (d < enemies[i].size/2 + player.size/2) {
+      gameOver = true;
+    }
+  }
+  
+  // Check for bullet-enemy collisions
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    for (let j = bullets.length - 1; j >= 0; j--) {
+      let d = dist(enemies[i].pos.x, enemies[i].pos.y, bullets[j].pos.x, bullets[j].pos.y);
+      if (d < enemies[i].size/2 + bullets[j].r) {
+        enemies.splice(i, 1);
+        bullets.splice(j, 1);
+        score += 10;
+        break;
+      }
+    }
+  }
+  
+  // Every 30 frames, spawn new enemies based on high smoke density
+  if (frameCount % 30 === 0) {
+    spawnEnemiesFromDensity();
+  }
+  
+  // Display the score
+  fill(255);
+  textSize(16);
+  text("Score: " + score, 10, 20);
+  
+  // Display game over message if needed
+  if (gameOver) {
+    textSize(48);
+    textAlign(CENTER, CENTER);
+    fill(255, 0, 0);
+    text("GAME OVER", width/2, height/2);
+    noLoop();
+  }
+  
+  // Advance the Perlin noise time offset
+  zOff += 0.005;
+}
+
+/*******************************************************
+ *                FLOW FIELD FUNCTIONS
+ *******************************************************/
+function updateFlowField() {
+  let yOff = 0;
+  for (let y = 0; y < rows; y++) {
+    let xOff = 0;
+    for (let x = 0; x < cols; x++) {
+      let index = x + y * cols;
+      let angle = noise(xOff, yOff, zOff) * TWO_PI * 2;
+      flowField[index] = angle;
+      xOff += inc;
+    }
+    yOff += inc;
+  }
+}
+
+function applySwirl(mx, my) {
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      let centerX = x * scale + scale / 2;
+      let centerY = y * scale + scale / 2;
+      let d = dist(mx, my, centerX, centerY);
+      if (d < swirlRadius) {
+        let index = x + y * cols;
+        let angle = flowField[index];
+        angle += swirlStrength * (1 - d / swirlRadius);
+        flowField[index] = angle;
+      }
+    }
+  }
+}
+
+/*******************************************************
+ *                   PARTICLE CLASS
+ *       (Creates the smoke-like flow trails)
+ *******************************************************/
+class Particle {
+  constructor() {
+    this.pos = createVector(random(width), random(height));
+    this.vel = createVector(0, 0);
+    this.acc = createVector(0, 0);
+    this.r = 4;
+    this.rColor = random(50, 255);
+    this.gColor = random(50, 255);
+    this.bColor = random(50, 255);
+  }
+  
+  follow(flow) {
+    let x = floor(this.pos.x / scale);
+    let y = floor(this.pos.y / scale);
+    let index = x + y * cols;
+    let angle = flow[index];
+    let force = p5.Vector.fromAngle(angle);
+    force.setMag(maxSpeed);
+    this.applyForce(force);
+  }
+  
+  applyForce(force) {
+    this.acc.add(force);
+  }
+  
+  update() {
+    this.vel.add(this.acc);
+    this.pos.add(this.vel);
+    this.vel.limit(maxSpeed);
+    this.acc.mult(0);
+  }
+  
+  edges() {
+    if (this.pos.x > width)  this.pos.x = 0;
+    if (this.pos.x < 0)      this.pos.x = width;
+    if (this.pos.y > height) this.pos.y = 0;
+    if (this.pos.y < 0)      this.pos.y = height;
+  }
+  
+  show() {
+    noStroke();
+    fill(this.rColor, this.gColor, this.bColor, 150);
+    ellipse(this.pos.x, this.pos.y, this.r, this.r);
+  }
+}
+
+/*******************************************************
+ *                    PLAYER CLASS
+ *   (Uses the camera feed as the player's avatar)
+ *******************************************************/
+class Player {
+  constructor() {
+    this.pos = createVector(width/2, height/2);
+    this.vel = createVector(0, 0);
+    this.angle = 0;
+    this.size = 40; // Diameter of the circular camera feed
+  }
+  
+  update() {
+    // --- Mobile Joystick Control ---
+    if (joystick.active) {
+      let dir = createVector(joystick.currentX - joystick.baseX, joystick.currentY - joystick.baseY);
+      let m = dir.mag();
+      if (m > 10) {
+        this.angle = dir.heading();
+        let forceMag = map(m, 0, joystick.baseRadius, 0, 0.1);
+        let force = p5.Vector.fromAngle(this.angle).mult(forceMag);
+        this.vel.add(force);
+      }
+    } else {
+      // --- Keyboard Controls (for desktop testing) ---
+      if (keyIsDown(LEFT_ARROW) || keyIsDown(65)) {
+        this.angle -= 0.05;
+      }
+      if (keyIsDown(RIGHT_ARROW) || keyIsDown(68)) {
+        this.angle += 0.05;
+      }
+      if (keyIsDown(UP_ARROW) || keyIsDown(87)) {
+        let force = p5.Vector.fromAngle(this.angle).mult(0.1);
+        this.vel.add(force);
+      }
+    }
+    
+    this.vel.mult(0.99);
+    this.pos.add(this.vel);
+    this.edges();
+  }
+  
+  edges() {
+    if (this.pos.x > width) this.pos.x = 0;
+    if (this.pos.x < 0) this.pos.x = width;
+    if (this.pos.y > height) this.pos.y = 0;
+    if (this.pos.y < 0) this.pos.y = height;
+  }
+  
+  show() {
+    push();
+    translate(this.pos.x, this.pos.y);
+    // Draw the camera feed as a circle by clipping the video image
+    drawingContext.save();
+    drawingContext.beginPath();
+    drawingContext.arc(0, 0, this.size/2, 0, TWO_PI);
+    drawingContext.clip();
+    image(video, -this.size/2, -this.size/2, this.size, this.size);
+    drawingContext.restore();
+    pop();
+  }
+  
+  shoot() {
+    let bullet = new Bullet(this.pos.x, this.pos.y, this.angle);
+    bullets.push(bullet);
+  }
+}
+
+/*******************************************************
+ *                    BULLET CLASS
+ *******************************************************/
+class Bullet {
+  constructor(x, y, angle) {
+    this.pos = createVector(x, y);
+    this.vel = p5.Vector.fromAngle(angle);
+    this.vel.mult(5);
+    this.r = 4;
+    this.life = 60;  // Lifetime in frames
+  }
+  
+  update() {
+    this.pos.add(this.vel);
+    this.life--;
+  }
+  
+  offscreen() {
+    return (this.pos.x < 0 || this.pos.x > width || this.pos.y < 0 || this.pos.y > height || this.life <= 0);
+  }
+  
+  show() {
+    fill(255, 255, 0);
+    noStroke();
+    ellipse(this.pos.x, this.pos.y, this.r * 2);
+  }
+}
+
+/*******************************************************
+ *                    ENEMY CLASS
+ *******************************************************/
+class Enemy {
+  constructor(x, y) {
+    this.pos = createVector(x, y);
+    this.size = 20;
+    this.vel = createVector(0,0);
+  }
+  
+  update() {
+    let x = floor(this.pos.x / scale);
+    let y = floor(this.pos.y / scale);
+    let index = x + y * cols;
+    let angle = flowField[index];
+    let force = p5.Vector.fromAngle(angle);
+    force.setMag(0.5);
+    this.vel.add(force);
+    this.vel.limit(2);
+    this.pos.add(this.vel);
+    this.edges();
+  }
+  
+  edges() {
+    if (this.pos.x > width) this.pos.x = 0;
+    if (this.pos.x < 0) this.pos.x = width;
+    if (this.pos.y > height) this.pos.y = 0;
+    if (this.pos.y < 0) this.pos.y = height;
+  }
+  
+  show() {
+    fill(255, 0, 0);
+    noStroke();
+    ellipse(this.pos.x, this.pos.y, this.size);
+  }
+}
+
+/*******************************************************
+ *          ENEMY SPAWNING FROM SMOKE DENSITY
+ *******************************************************/
+function spawnEnemiesFromDensity() {
+  let density = new Array(cols * rows).fill(0);
+  particles.forEach(p => {
+    let x = floor(p.pos.x / scale);
+    let y = floor(p.pos.y / scale);
+    let index = x + y * cols;
+    if (index >= 0 && index < density.length) {
+      density[index]++;
+    }
+  });
+  
+  let threshold = 3;
+  
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      let index = x + y * cols;
+      if (density[index] > threshold && random(1) < 0.02) {
+        let cellX = x * scale + scale/2;
+        let cellY = y * scale + scale/2;
+        let tooClose = false;
+        for (let e of enemies) {
+          if (dist(e.pos.x, e.pos.y, cellX, cellY) < 30) {
+            tooClose = true;
+            break;
+          }
+        }
+        if (!tooClose && enemies.length < 20) {
+          enemies.push(new Enemy(cellX, cellY));
+        }
+      }
+    }
+  }
+}
+
+/*******************************************************
+ *                    DRAW JOYSTICK
+ *******************************************************/
+function drawJoystick() {
+  push();
+  noFill();
+  stroke(255);
+  strokeWeight(2);
+  ellipse(joystick.baseX, joystick.baseY, joystick.baseRadius * 2);
+  fill(255, 150);
+  noStroke();
+  ellipse(joystick.currentX, joystick.currentY, joystick.knobRadius * 2);
+  pop();
+}
+
+/*******************************************************
+ *                   INPUT HANDLING
+ *******************************************************/
+function keyPressed() {
+  if (key === ' ') {
+    if (!gameOver) player.shoot();
+  }
+  if (key === 'r') {
+    for (let i = 0; i < flowField.length; i++) {
+      flowField[i] = random(TWO_PI);
+    }
+  }
+}
+</script>
+</body>
+w</html>
